@@ -1,33 +1,45 @@
 'use client';
 
 import React, { useRef, useEffect, useState } from 'react';
-import { Camera, CameraOff, Maximize2, Shield, Eye, Compass, Video, AlertCircle } from 'lucide-react';
+import { Camera, CameraOff, Maximize2, Shield, Eye, Compass, Video, AlertCircle, RefreshCw, AlertTriangle } from 'lucide-react';
 import { MonitoringMetrics } from '@/types/safety';
+import { CameraDeviceInfo, CameraConnectionStatus } from '@/lib/useCameraManager';
 
 interface WebcamPreviewProps {
   isMonitoring: boolean;
   metrics: MonitoringMetrics | null;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  devices?: CameraDeviceInfo[];
   selectedCameraId?: string;
+  cameraStatus?: CameraConnectionStatus;
+  statusMessage?: string;
+  isSwitching?: boolean;
+  isFallbackActive?: boolean;
+  cameraError?: string | null;
   showOverlay?: boolean;
   onCameraChange?: (deviceId: string) => void;
   onFrameCapture?: (frameData: string) => void;
+  onRefreshCameras?: () => void;
 }
 
 export function WebcamPreview({
   isMonitoring,
   metrics,
+  videoRef,
+  devices = [],
   selectedCameraId,
+  cameraStatus = 'idle',
+  statusMessage = '',
+  isSwitching = false,
+  isFallbackActive = false,
+  cameraError = null,
   showOverlay = true,
   onCameraChange,
   onFrameCapture,
+  onRefreshCameras,
 }: WebcamPreviewProps) {
-  const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
-  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [currentTime, setCurrentTime] = useState<string>('');
-  const [simulatedStream, setSimulatedStream] = useState<boolean>(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
 
   // Clock for HUD timestamp
   useEffect(() => {
@@ -43,66 +55,8 @@ export function WebcamPreview({
     return () => clearInterval(timer);
   }, []);
 
-  // Enumerate video devices
-  useEffect(() => {
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
-      navigator.mediaDevices.enumerateDevices().then((devices) => {
-        const cameras = devices.filter((d) => d.kind === 'videoinput');
-        setVideoDevices(cameras);
-      }).catch(() => {});
-    }
-  }, []);
-
-  // Manage webcam stream
-  useEffect(() => {
-    let stream: MediaStream | null = null;
-
-    if (isMonitoring) {
-      setCameraError(null);
-      const constraints: MediaStreamConstraints = {
-        video: selectedCameraId
-          ? { deviceId: { exact: selectedCameraId } }
-          : { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-        audio: false,
-      };
-
-      if (navigator.mediaDevices?.getUserMedia) {
-        navigator.mediaDevices
-          .getUserMedia(constraints)
-          .then((s) => {
-            stream = s;
-            if (videoRef.current) {
-              videoRef.current.srcObject = s;
-              videoRef.current.play().catch(() => {});
-            }
-            setHasPermission(true);
-            setSimulatedStream(false);
-          })
-          .catch((err) => {
-            console.warn('Real camera not accessible or blocked:', err);
-            setHasPermission(false);
-            setCameraError(err?.message || 'Camera permission denied or camera device in use.');
-            setSimulatedStream(true);
-          });
-      } else {
-        setSimulatedStream(true);
-      }
-    } else {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-        tracks.forEach((t) => t.stop());
-        videoRef.current.srcObject = null;
-      }
-    }
-
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
-      }
-    };
-  }, [isMonitoring, selectedCameraId]);
-
   // Real frame capture loop at ~14 FPS for live AI inference over WebSocket
+  // Draws strictly from the currently active camera stream in videoRef
   useEffect(() => {
     let frameInterval: NodeJS.Timeout | null = null;
 
@@ -128,7 +82,7 @@ export function WebcamPreview({
     return () => {
       if (frameInterval) clearInterval(frameInterval);
     };
-  }, [isMonitoring, onFrameCapture]);
+  }, [isMonitoring, onFrameCapture, videoRef]);
 
   // Render automotive detection overlay HUD on canvas
   useEffect(() => {
@@ -252,39 +206,71 @@ export function WebcamPreview({
     }
   };
 
+  const activeDevice = devices.find((d) => d.deviceId === selectedCameraId);
+
   return (
     <div
       id="camera-preview-container"
       className="relative rounded-2xl overflow-hidden cockpit-panel aspect-video w-full bg-[#0D151B] select-none border border-[var(--border)]"
     >
-      {/* Real Video Element */}
+      {/* Real Video Element managed via videoRef */}
       <video
-        ref={videoRef}
+        ref={videoRef as any}
         autoPlay
         playsInline
         muted
-        className={`w-full h-full object-cover ${simulatedStream ? 'hidden' : 'block'}`}
+        className={`w-full h-full object-cover ${cameraError ? 'hidden' : 'block'}`}
       />
 
-      {/* Simulated Automotive Cockpit Feed if webcam permission unavailable */}
-      {simulatedStream && isMonitoring && (
-        <div className="w-full h-full flex flex-col items-center justify-center relative automotive-grid bg-slate-950/80 p-6 text-center">
-          <div className="w-48 h-48 rounded-full border border-dashed border-[var(--sensor-blue)]/40 flex items-center justify-center relative">
-            <div className="w-36 h-36 rounded-full border border-[var(--safety-mint)]/30 flex items-center justify-center">
-              <Shield size={38} className="text-[var(--primary-blue)] opacity-70 animate-pulse-subtle" />
-            </div>
-            <div className="absolute inset-0 rounded-full radar-sweep pointer-events-none" />
+      {/* Switching Stream Transition Overlay */}
+      {isSwitching && (
+        <div className="absolute inset-0 z-30 bg-black/60 backdrop-blur-xs flex flex-col items-center justify-center text-white font-mono space-y-2">
+          <RefreshCw size={28} className="animate-spin text-[var(--primary-blue)]" />
+          <span className="text-xs uppercase tracking-wider">Switching Optical Feed...</span>
+          <span className="text-[10px] text-slate-400">Reconfiguring hardware constraints</span>
+        </div>
+      )}
+
+      {/* Fallback Banner Toast inside HUD */}
+      {isFallbackActive && isMonitoring && (
+        <div className="absolute top-16 left-5 right-5 z-25 flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono text-[11px] backdrop-blur-md animate-in fade-in duration-300">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={14} className="text-amber-400 shrink-0" />
+            <span>External webcam disconnected. Auto-fallback active: <strong>{activeDevice?.label || 'Built-in Laptop Camera'}</strong></span>
           </div>
-          <span className="text-xs font-mono text-[var(--sensor-blue)] mt-4 tracking-widest uppercase">
-            SIMULATED AI VISION STREAM ACTIVE
-          </span>
-          <span className="text-[10px] font-mono text-[var(--text-muted)] max-w-sm mt-1">
-            {cameraError || 'Webcam feed not available. Running real server-side inference pipeline.'}
+          <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-200">
+            Fallback
           </span>
         </div>
       )}
 
-      {/* Idle / Off state */}
+      {/* Error / Fallback Feed if camera hardware access fails */}
+      {cameraError && isMonitoring && (
+        <div className="w-full h-full flex flex-col items-center justify-center relative automotive-grid bg-slate-950/80 p-6 text-center">
+          <div className="w-48 h-48 rounded-full border border-dashed border-[var(--alert-coral)]/40 flex items-center justify-center relative">
+            <div className="w-36 h-36 rounded-full border border-[var(--alert-coral)]/30 flex items-center justify-center">
+              <CameraOff size={38} className="text-[var(--alert-coral)] opacity-80" />
+            </div>
+          </div>
+          <span className="text-xs font-mono text-[var(--alert-coral)] mt-4 tracking-widest uppercase">
+            CAMERA FEED INTERRUPTED
+          </span>
+          <span className="text-[10px] font-mono text-slate-400 max-w-sm mt-1">
+            {cameraError}
+          </span>
+          {onRefreshCameras && (
+            <button
+              onClick={onRefreshCameras}
+              className="mt-3 px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white font-mono text-[11px] flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <RefreshCw size={12} />
+              <span>Retry Device Scan</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Idle / Standby state */}
       {!isMonitoring && (
         <div className="w-full h-full flex flex-col items-center justify-center bg-[#10181F] text-slate-400">
           <CameraOff size={42} className="opacity-40 mb-3" />
@@ -292,7 +278,7 @@ export function WebcamPreview({
             CABIN SENSOR IDLE
           </span>
           <span className="text-xs font-mono text-slate-500 mt-1">
-            Click &quot;Start Monitoring&quot; to initialize video feed &amp; AI models
+            {activeDevice ? `Selected: ${activeDevice.label}` : 'Select a webcam and click "Start Monitoring" to initialize'}
           </span>
         </div>
       )}
@@ -318,9 +304,15 @@ export function WebcamPreview({
         <div className="flex items-center gap-3">
           {/* REC Status */}
           <div className="flex items-center gap-2 px-2.5 py-1 rounded bg-black/60 backdrop-blur-md border border-white/10 text-white">
-            <span className={`w-2.5 h-2.5 rounded-full ${isMonitoring ? 'bg-rose-500 animate-ping' : 'bg-slate-500'}`} />
+            <span className={`w-2.5 h-2.5 rounded-full ${
+              isMonitoring 
+                ? isFallbackActive 
+                  ? 'bg-amber-400 animate-ping' 
+                  : 'bg-rose-500 animate-ping' 
+                : 'bg-slate-500'
+            }`} />
             <span className="text-[10px] font-mono font-bold tracking-wider uppercase">
-              {isMonitoring ? 'REC • LIVE' : 'STANDBY'}
+              {isMonitoring ? (isFallbackActive ? 'REC • FALLBACK' : 'REC • LIVE') : 'STANDBY'}
             </span>
           </div>
 
@@ -354,15 +346,18 @@ export function WebcamPreview({
       {/* HUD Bottom Bar */}
       <div className="absolute bottom-4 left-5 right-5 flex items-center justify-between z-20 pointer-events-auto">
         <div className="flex items-center gap-2">
-          {videoDevices.length > 0 && onCameraChange && (
+          {/* Synchronized Camera Select inside HUD */}
+          {devices.length > 0 && onCameraChange && (
             <select
               value={selectedCameraId || ''}
               onChange={(e) => onCameraChange(e.target.value)}
-              className="bg-black/70 backdrop-blur-md text-white text-[11px] font-mono px-2.5 py-1 rounded border border-white/20 outline-none cursor-pointer"
+              className="bg-black/70 backdrop-blur-md text-white text-[11px] font-mono px-2.5 py-1 rounded border border-white/20 outline-none cursor-pointer max-w-[220px] truncate"
+              title="Switch Camera Feed"
             >
-              {videoDevices.map((d, idx) => (
+              {devices.map((d, idx) => (
                 <option key={d.deviceId || idx} value={d.deviceId}>
                   {d.label || `Camera ${idx + 1}`}
+                  {d.isExternal ? ' [USB]' : d.isBuiltIn ? ' [Built-in]' : ''}
                 </option>
               ))}
             </select>
@@ -375,8 +370,8 @@ export function WebcamPreview({
           </div>
         </div>
 
-        <div className="text-[10px] font-mono text-white/60 bg-black/50 px-2 py-0.5 rounded border border-white/10">
-          DRIVEGUARD AI VISION 1080P
+        <div className="text-[10px] font-mono text-white/60 bg-black/50 px-2 py-0.5 rounded border border-white/10 hidden sm:block">
+          {activeDevice ? activeDevice.label : 'DRIVEGUARD AI VISION 1080P'}
         </div>
       </div>
     </div>

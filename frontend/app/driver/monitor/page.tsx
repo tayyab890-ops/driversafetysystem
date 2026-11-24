@@ -10,6 +10,7 @@ import { WeaponDetectionBadge } from '@/components/safety/WeaponDetectionBadge';
 import { AlertNotification } from '@/components/safety/AlertNotification';
 import { api } from '@/lib/api';
 import { audioAlerts } from '@/lib/audioAlerts';
+import { useCameraManager } from '@/lib/useCameraManager';
 import { MonitoringMetrics, SafetyAlert } from '@/types/safety';
 import { Shield, User, Clock, AlertTriangle, CheckCircle2, AlertCircle } from 'lucide-react';
 
@@ -18,13 +19,37 @@ export default function DriverMonitorPage() {
   const [isPaused, setIsPaused] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const [metrics, setMetrics] = useState<MonitoringMetrics | null>(null);
   const [activeAlert, setActiveAlert] = useState<SafetyAlert | null>(null);
   const [sessionSeconds, setSessionSeconds] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [selectedScenario, setSelectedScenario] = useState<'normal' | 'drowsy' | 'distracted' | 'weapon_alert'>('normal');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Central Camera Management (Multi-camera detection, hot-switching, auto-fallback)
+  const {
+    devices: cameraDevices,
+    selectedCameraId,
+    status: cameraStatus,
+    statusMessage: cameraStatusMessage,
+    isSwitching: isCameraSwitching,
+    isFallbackActive,
+    cameraError,
+    videoRef,
+    switchCamera: handleCameraChange,
+    refreshCameras: handleRefreshCameras,
+  } = useCameraManager({
+    isMonitoring,
+    onCameraSwitched: (id, label) => {
+      console.log(`[DriveGuard] Optical feed switched to: ${label} (${id})`);
+    },
+    onFallbackOccurred: (fromId, toDevice) => {
+      console.warn(`[DriveGuard] Camera fallback engaged from ${fromId} to ${toDevice?.label}`);
+    },
+    onError: (err) => {
+      setErrorMessage(err.message);
+    },
+  });
 
   const wsRef = useRef<WebSocket | null>(null);
   const isPausedRef = useRef(isPaused);
@@ -105,10 +130,15 @@ export default function DriverMonitorPage() {
                 if (!current || current.category !== 'drowsiness') {
                   return {
                     id: 'drowsy-active',
+                    sessionId: sessionId || 'session-active',
                     category: 'drowsiness',
                     title: drowsyStatus,
                     description: `Prolonged eye closure detected (EAR: ${data.drowsiness?.ear?.toFixed(3)}). Safety rating: ${data.safetyScore}/100.`,
                     severity: drowsyStatus === 'MICROSLEEP WARNING' ? 'critical' : 'high',
+                    acknowledged: false,
+                    driverId: 'current-driver',
+                    driverName: 'Commercial Driver',
+                    confidence: data.drowsiness?.confidence || 0.95,
                     timestamp: new Date().toISOString(),
                   };
                 }
@@ -134,10 +164,15 @@ export default function DriverMonitorPage() {
                 if (!current || current.category !== 'distraction') {
                   return {
                     id: 'distract-active',
+                    sessionId: sessionId || 'session-active',
                     category: 'distraction',
                     title: distStatus ?? 'HEAD TURNED / OFF-ROAD',
                     description: `Gaze departure detected (Pitch: ${data.distraction?.pitch?.toFixed(1)}°, Yaw: ${data.distraction?.yaw?.toFixed(1)}°). Safety rating: ${data.safetyScore}/100.`,
                     severity: distStatus === 'PHONE / DOWNWARD GAZE' ? 'high' : 'medium',
+                    acknowledged: false,
+                    driverId: 'current-driver',
+                    driverName: 'Commercial Driver',
+                    confidence: data.distraction?.confidence || 0.95,
                     timestamp: new Date().toISOString(),
                   };
                 }
@@ -325,18 +360,34 @@ export default function DriverMonitorPage() {
         <WebcamPreview
           isMonitoring={isMonitoring}
           metrics={metrics}
+          videoRef={videoRef}
+          devices={cameraDevices}
           selectedCameraId={selectedCameraId}
+          cameraStatus={cameraStatus}
+          statusMessage={cameraStatusMessage}
+          isSwitching={isCameraSwitching}
+          isFallbackActive={isFallbackActive}
+          cameraError={cameraError}
           showOverlay={showOverlay}
-          onCameraChange={(id) => setSelectedCameraId(id)}
+          onCameraChange={handleCameraChange}
           onFrameCapture={handleFrameCapture}
+          onRefreshCameras={handleRefreshCameras}
         />
 
-        {/* Camera Tactical Controls */}
+        {/* Camera Tactical Controls & Optical Sensor Selection */}
         <CameraControls
           isMonitoring={isMonitoring}
           isPaused={isPaused}
           showOverlay={showOverlay}
           soundEnabled={soundEnabled}
+          devices={cameraDevices}
+          selectedCameraId={selectedCameraId}
+          cameraStatus={cameraStatus}
+          statusMessage={cameraStatusMessage}
+          isSwitching={isCameraSwitching}
+          isFallbackActive={isFallbackActive}
+          onCameraChange={handleCameraChange}
+          onRefreshCameras={handleRefreshCameras}
           onStart={handleStart}
           onStop={handleStop}
           onPause={handlePause}
