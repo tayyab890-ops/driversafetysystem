@@ -82,6 +82,13 @@ export function useCameraManager({
   const [activeCameraLabel, setActiveCameraLabel] = useState<string>('');
   const [isFallbackActive, setIsFallbackActive] = useState<boolean>(false);
 
+  const onCameraSwitchedRef = useRef(onCameraSwitched);
+  onCameraSwitchedRef.current = onCameraSwitched;
+  const onFallbackOccurredRef = useRef(onFallbackOccurred);
+  onFallbackOccurredRef.current = onFallbackOccurred;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const activeStreamRef = useRef<MediaStream | null>(null);
   const currentGenRef = useRef<number>(0);
@@ -167,20 +174,19 @@ export function useCameraManager({
 
       if (fallbackTarget) {
         setSelectedCameraId(fallbackTarget.deviceId);
-        if (onFallbackOccurred) {
-          onFallbackOccurred(fromDeviceId, fallbackTarget);
+        if (onFallbackOccurredRef.current) {
+          onFallbackOccurredRef.current(fromDeviceId, fallbackTarget);
         }
         await switchCamera(fallbackTarget.deviceId, true);
       } else {
         // Generic fallback without exact deviceId
-        if (onFallbackOccurred) {
-          onFallbackOccurred(fromDeviceId, null);
+        if (onFallbackOccurredRef.current) {
+          onFallbackOccurredRef.current(fromDeviceId, null);
         }
         await switchCamera('', true);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [enumerateCameras, onFallbackOccurred]
+    [enumerateCameras]
   );
 
   /**
@@ -249,11 +255,16 @@ export function useCameraManager({
         activeStreamRef.current = stream;
 
         if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+          if (videoRef.current.srcObject !== stream) {
+            videoRef.current.srcObject = stream;
+          }
           try {
             await videoRef.current.play();
-          } catch (e) {
-            console.warn('[CameraManager] video.play() error:', e);
+          } catch (e: any) {
+            // Ignore benign AbortError when play is superseded by consecutive loads
+            if (e?.name !== 'AbortError') {
+              console.warn('[CameraManager] video.play() error:', e);
+            }
           }
         }
 
@@ -288,8 +299,8 @@ export function useCameraManager({
           setStatusMessage(`Active: ${displayName}`);
         }
 
-        if (onCameraSwitched) {
-          onCameraSwitched(resolvedDeviceId, displayName);
+        if (onCameraSwitchedRef.current) {
+          onCameraSwitchedRef.current(resolvedDeviceId, displayName);
         }
 
         return true;
@@ -318,14 +329,13 @@ export function useCameraManager({
         setStatusMessage(errorMsg);
         setHasPermission(false);
 
-        if (onError && err instanceof Error) {
-          onError(err);
+        if (onErrorRef.current && err instanceof Error) {
+          onErrorRef.current(err);
         }
         return false;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [stopCurrentStream, handleTrackEnded, enumerateCameras, triggerAutoFallback, onCameraSwitched, onError]
+    [stopCurrentStream, handleTrackEnded, enumerateCameras, triggerAutoFallback]
   );
 
   /**

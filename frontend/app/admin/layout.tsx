@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation';
 import { AdminSidebar } from '@/components/layout/AdminSidebar';
 import { useAuth } from '@/lib/authContext';
 
+// Opt layout out of instant-navigation dropped-segment validation
+export const instant = false;
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const { user, loading } = useAuth();
@@ -28,6 +31,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <span className="text-xs font-mono tracking-widest text-[var(--text-secondary)] uppercase">
             Verifying Fleet Operations Authorization...
           </span>
+        </div>
+        {/* Render segment in hidden container to prevent Next.js dropped segment warning */}
+        <div className="hidden" aria-hidden="true">
+          {children}
         </div>
       </div>
     );

@@ -26,6 +26,18 @@ export default function DriverMonitorPage() {
   const [selectedScenario, setSelectedScenario] = useState<'normal' | 'drowsy' | 'distracted' | 'weapon_alert'>('normal');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const handleCameraSwitched = useCallback((id: string, label: string) => {
+    console.log(`[DriveGuard] Optical feed switched to: ${label} (${id})`);
+  }, []);
+
+  const handleFallbackOccurred = useCallback((fromId: string, toDevice: any) => {
+    console.warn(`[DriveGuard] Camera fallback engaged from ${fromId} to ${toDevice?.label}`);
+  }, []);
+
+  const handleCameraError = useCallback((err: Error) => {
+    setErrorMessage(err.message);
+  }, []);
+
   // Central Camera Management (Multi-camera detection, hot-switching, auto-fallback)
   const {
     devices: cameraDevices,
@@ -40,15 +52,9 @@ export default function DriverMonitorPage() {
     refreshCameras: handleRefreshCameras,
   } = useCameraManager({
     isMonitoring,
-    onCameraSwitched: (id, label) => {
-      console.log(`[DriveGuard] Optical feed switched to: ${label} (${id})`);
-    },
-    onFallbackOccurred: (fromId, toDevice) => {
-      console.warn(`[DriveGuard] Camera fallback engaged from ${fromId} to ${toDevice?.label}`);
-    },
-    onError: (err) => {
-      setErrorMessage(err.message);
-    },
+    onCameraSwitched: handleCameraSwitched,
+    onFallbackOccurred: handleFallbackOccurred,
+    onError: handleCameraError,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
