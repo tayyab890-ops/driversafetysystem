@@ -5,9 +5,6 @@ import { useRouter } from 'next/navigation';
 import { AdminSidebar } from '@/components/layout/AdminSidebar';
 import { useAuth } from '@/lib/authContext';
 
-// Opt layout out of instant-navigation dropped-segment validation
-export const instant = false;
-
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const { user, loading } = useAuth();

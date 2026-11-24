@@ -5,9 +5,6 @@ import { useRouter } from 'next/navigation';
 import { DriverSidebar } from '@/components/layout/DriverSidebar';
 import { useAuth } from '@/lib/authContext';
 
-// Opt layout out of instant-navigation dropped-segment validation
-export const instant = false;
-
 export default function DriverLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const { user, loading } = useAuth();
