@@ -1,36 +1,95 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DriveGuard AI — Intelligent Driver Safety & Fleet Operations System
+
+DriveGuard AI is an intelligent computer vision system for real-time commercial vehicle driver safety monitoring, fatigue prevention, distraction tracking, and emergency fleet dispatch operations.
+
+---
+
+## Project Architecture
+
+The project is cleanly divided into **frontend/** and **backend/** modules:
+
+```
+DriverSafetySystem/
+├── frontend/                     # Next.js 15 Web Application (UI, Dashboards, Live Cockpit)
+│   ├── app/                      # App Router: Landing, Login, Register, Driver, Admin
+│   ├── components/               # 3D Claymorphic UI components, Layouts, Visualizers
+│   ├── lib/                      # Utilities, CSV export, telemetry math helpers
+│   ├── public/                   # Static media, SVG icons, automotive cutaways
+│   ├── services/                 # Frontend telemetry & simulation services
+│   ├── types/                    # TypeScript interfaces for driver safety & alerts
+│   ├── package.json              # Frontend npm dependencies (Next.js 15, React 19, Tailwind CSS)
+│   ├── tsconfig.json             # TypeScript compiler configuration (@/* aliases)
+│   └── next.config.ts            # Next.js runtime & bundler configuration
+│
+├── backend/                      # Python AI Engine & Telemetry Gateway (FastAPI)
+│   ├── api/                      # REST API & WebSocket endpoints (Telemetry, Alerts, Sessions)
+│   ├── core/                     # Configuration, CORS, safety thresholds (EAR, Yaw, Pitch)
+│   ├── database/                 # SQLite/PostgreSQL connection & relational schema
+│   ├── detection/                # Computer vision pipelines:
+│   │   ├── face_mesh.py          # MediaPipe 468-point facial landmark processing
+│   │   ├── drowsiness_detector.py# Eye Aspect Ratio (EAR) & microsleep calculation
+│   │   ├── distraction_detector.py# 6-DOF Head Pose (Yaw/Pitch/Roll) tracking
+│   │   ├── yawn_detector.py      # Mouth Aspect Ratio (MAR) yawning cluster tracking
+│   │   └── weapon_detector.py    # Threat silhouette detection & human verification protocol
+│   ├── models/                   # SQLAlchemy ORM models & pretrained weights directory
+│   │   ├── db_models.py          # Relational entities: Driver, Session, Alert, TelemetryRecord
+│   │   └── pretrained/           # Pretrained AI model checkpoint files (.pt, .onnx, .tflite)
+│   ├── services/                 # Telemetry processing & emergency cabin audio dispatch
+│   ├── main.py                   # FastAPI server entrypoint
+│   └── requirements.txt          # Python dependencies (OpenCV, MediaPipe, NumPy, FastAPI)
+│
+├── package.json                  # Root runner script configuration
+└── README.md                     # Project overview & running instructions
+```
+
+---
 
 ## Getting Started
 
-First, run the development server:
+### 1. Running the Frontend
 
+You can launch the frontend either from the root or inside `frontend/`:
+
+**From Project Root:**
 ```bash
 npm run dev
 # or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run dev:frontend
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+**From `frontend/` directory:**
+```bash
+cd frontend
+npm run dev
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Open [http://localhost:3000](http://localhost:3000) to view the application:
+- **Landing Page:** [http://localhost:3000](http://localhost:3000)
+- **Driver Dashboard:** [http://localhost:3000/driver](http://localhost:3000/driver)
+- **Live Cockpit Video Stream:** [http://localhost:3000/driver/monitor](http://localhost:3000/driver/monitor)
+- **Admin Fleet Operations Center:** [http://localhost:3000/admin](http://localhost:3000/admin)
+- **Live Fleet Telemetry Monitoring:** [http://localhost:3000/admin/monitoring](http://localhost:3000/admin/monitoring)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## Learn More
+### 2. Running the Backend
 
-To learn more about Next.js, take a look at the following resources:
+**From `backend/` directory:**
+```bash
+cd backend
+python -m venv venv
+# Windows:
+.\venv\Scripts\activate
+# Linux/macOS:
+source venv/bin/activate
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+pip install -r requirements.txt
+uvicorn backend.main:app --reload --port 8000
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+**Or from Project Root:**
+```bash
+npm run dev:backend
+```
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Interactive API documentation will be available at [http://localhost:8000/docs](http://localhost:8000/docs).

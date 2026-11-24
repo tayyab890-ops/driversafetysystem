@@ -1,41 +1,77 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+# Dependencies
+node_modules/
+*/node_modules/
+.pnp
+.pnp.js
+.yarn/install-state.gz
 
-# testing
-/coverage
+# Testing & coverage
+coverage/
+*/coverage/
 
-# next.js
-/.next/
-/out/
+# Next.js build outputs
+.next/
+*/.next/
+out/
+*/out/
+build/
+*/build/
 
-# production
-/build
-
-# misc
+# Operating System & debug
 .DS_Store
+Thumbs.db
 *.pem
-
-# debug
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# Environment files (exclude all secret env files, keep example templates)
+.env
+.env.*
+!.env.example
+!*/.env.example
 
-# vercel
-.vercel
+# Vercel
+.vercel/
 
-# typescript
+# TypeScript
 *.tsbuildinfo
 next-env.d.ts
+*/next-env.d.ts
+
+# Python / Backend virtualenv and bytecode
+__pycache__/
+*/__pycache__/
+*/*/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+*/venv/
+env/
+*/env/
+
+# Databases
+*.sqlite3
+*.db
+driveguard.db
+
+# Pretrained model binary checkpoints
+backend/models/pretrained/*.onnx
+backend/models/pretrained/*.pt
+backend/models/pretrained/*.tflite
+backend/pretrained_models/*.onnx
+backend/pretrained_models/*.pt
+backend/pretrained_models/*.tflite
+backend/pretrained_models/*.weights
+backend/pretrained_models/*.bin
+!backend/pretrained_models/README.md
+
+# IDE & AI Agent assistant workspace configs
+.vscode/
+.idea/
+.agents/
