@@ -30,6 +30,7 @@ interface ActiveAlertSession {
   gainNodes: GainNode[];
   timerIds: (NodeJS.Timeout | number)[];
   stop: () => void;
+  isContinuous?: boolean;
 }
 
 class AudioAlertSystem {
@@ -116,13 +117,27 @@ class AudioAlertSystem {
   }
 
   /**
+   * Stop an active alert immediately.
+   * If category is specified, only stops if that category is currently active.
+   */
+  public stopAlert(category?: string) {
+    if (!this.activeAlert) return;
+    if (category && this.activeAlert.category !== category) {
+      return;
+    }
+    this.stopCurrentAlert();
+  }
+
+  /**
    * Stop any actively playing warning sequence immediately.
    * Cancels oscillators, zeros gain nodes, and clears scheduled timers.
    */
   public stopCurrentAlert() {
     if (!this.activeAlert) return;
+    const cat = this.activeAlert.category;
 
     try {
+      this.activeAlert.stop();
       this.activeAlert.timerIds.forEach((t) => clearTimeout(t));
 
       const now = this.ctx ? this.ctx.currentTime : 0;
@@ -146,13 +161,135 @@ class AudioAlertSystem {
           // ignore already stopped
         }
       });
-
-      this.activeAlert.stop();
     } catch (e) {
       console.warn('[AudioAlertSystem] Error stopping alert:', e);
     } finally {
       this.activeAlert = null;
+      // Clear cooldown for this category so subsequent alarms trigger immediately without delay
+      if (cat) {
+        this.lastAlertTimes.delete(cat);
+      }
+      this.globalLastAlertTime = 0;
     }
+  }
+
+  /**
+   * Check if an alert is currently active
+   */
+  public isAlertActive(category?: string): boolean {
+    if (!this.activeAlert) return false;
+    if (category) return this.activeAlert.category === category;
+    return true;
+  }
+
+  /**
+   * Start or maintain a continuous looping warning beep for an active safety condition.
+   * Keeps playing continuously without stopping until stopAlert(category) or stopCurrentAlert() is called.
+   */
+  public startContinuousAlert(category: 'drowsiness' | 'distraction' | 'critical_warning') {
+    if (!this.soundEnabled) return;
+    this.initContext();
+    if (!this.ctx || !this.compressorNode) return;
+
+    const priority: AlertPriority = category === 'critical_warning' ? 3 : category === 'drowsiness' ? 3 : 2;
+
+    // If an alert session is already running for this exact category in continuous mode, let it keep playing
+    if (this.activeAlert && this.activeAlert.category === category && this.activeAlert.isContinuous) {
+      return;
+    }
+
+    // If an alert of higher priority is currently active, do not downgrade it
+    if (this.activeAlert && this.activeAlert.priority > priority) {
+      return;
+    }
+
+    // Stop lower-priority or previous alert before starting new continuous alert
+    if (this.activeAlert) {
+      this.stopCurrentAlert();
+    }
+
+    let isRunning = true;
+    const oscillators: OscillatorNode[] = [];
+    const gainNodes: GainNode[] = [];
+    const timerIds: (NodeJS.Timeout | number)[] = [];
+
+    const stop = () => {
+      isRunning = false;
+      timerIds.forEach((t) => clearTimeout(t));
+      const now = this.ctx ? this.ctx.currentTime : 0;
+      gainNodes.forEach((g) => {
+        try {
+          if (this.ctx) {
+            g.gain.cancelScheduledValues(now);
+            g.gain.setValueAtTime(0.0, now);
+          }
+          g.disconnect();
+        } catch {}
+      });
+      oscillators.forEach((o) => {
+        try {
+          o.stop();
+          o.disconnect();
+        } catch {}
+      });
+    };
+
+    const session: ActiveAlertSession = {
+      priority,
+      category,
+      startedAt: Date.now(),
+      expectedEndTime: Infinity, // Continuous loop!
+      oscillators,
+      gainNodes,
+      timerIds,
+      stop,
+      isContinuous: true,
+    };
+    this.activeAlert = session;
+
+    // Start continuous cycle schedule
+    const scheduleNextCycle = () => {
+      if (!isRunning || !this.ctx || !this.compressorNode || this.activeAlert !== session) {
+        return;
+      }
+
+      const ctx = this.ctx;
+      const targetComp = this.compressorNode;
+      const startTime = ctx.currentTime + 0.01;
+
+      // Clean up finished nodes from earlier cycles
+      oscillators.length = 0;
+      gainNodes.length = 0;
+
+      let cycleDuration = 0.50; // seconds
+
+      if (category === 'drowsiness') {
+        // Alternating heavy wake-up tones (740 Hz & 932 Hz)
+        this.scheduleAlertBeep(ctx, targetComp, 740, startTime, 0.16, 'sawtooth', 2000, 0.75, oscillators, gainNodes);
+        this.scheduleAlertBeep(ctx, targetComp, 932, startTime + 0.24, 0.16, 'sawtooth', 2000, 0.75, oscillators, gainNodes);
+        cycleDuration = 0.52;
+      } else if (category === 'distraction') {
+        // Urgent syncopated double-beeps (880 Hz & 1046 Hz)
+        this.scheduleAlertBeep(ctx, targetComp, 880, startTime, 0.10, 'triangle', 2600, 0.75, oscillators, gainNodes);
+        this.scheduleAlertBeep(ctx, targetComp, 1046, startTime + 0.16, 0.10, 'triangle', 2600, 0.75, oscillators, gainNodes);
+        cycleDuration = 0.42;
+      } else if (category === 'critical_warning') {
+        // Rapid dual harmonic siren pulse
+        [1046.5, 1318.5].forEach((freq, idx) => {
+          this.scheduleAlertBeep(ctx, targetComp, freq, startTime, 0.10, idx === 0 ? 'sawtooth' : 'triangle', 2600, idx === 0 ? 0.70 : 0.50, oscillators, gainNodes);
+          this.scheduleAlertBeep(ctx, targetComp, freq, startTime + 0.14, 0.10, idx === 0 ? 'sawtooth' : 'triangle', 2600, idx === 0 ? 0.70 : 0.50, oscillators, gainNodes);
+        });
+        cycleDuration = 0.38;
+      }
+
+      const timer = setTimeout(() => {
+        scheduleNextCycle();
+      }, Math.max(50, Math.floor((cycleDuration - 0.02) * 1000)));
+
+      timerIds.push(timer);
+    };
+
+    scheduleNextCycle();
   }
 
   /**
@@ -580,23 +717,19 @@ class AudioAlertSystem {
       title.includes('microsleep') ||
       title.includes('severe')
     ) {
-      this.playCriticalWarning();
+      this.startContinuousAlert('critical_warning');
       return true;
     }
 
     // Drowsiness check
     if (category === 'drowsiness' || title.includes('drowsy') || title.includes('fatigue')) {
-      if (severity === 'high') {
-        this.playDrowsinessAlert();
-      } else {
-        this.playDrowsinessAlert();
-      }
+      this.startContinuousAlert('drowsiness');
       return true;
     }
 
     // Distraction check
     if (category === 'distraction' || title.includes('distract') || title.includes('gaze')) {
-      this.playDistractionAlert();
+      this.startContinuousAlert('distraction');
       return true;
     }
 

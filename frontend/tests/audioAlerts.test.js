@@ -234,6 +234,32 @@ async function run() {
   audioAlerts.playAcknowledge();
   assert(audioAlerts.activeAlert === null, 'Active alert hushed immediately on acknowledge');
 
+  // Testing Continuous Looping Alerts and Instant Hush
+  console.log('\nTesting Continuous Looping Alert Activation & Instant Stop');
+  audioAlerts.stopCurrentAlert();
+  ctx.createdOscillators = [];
+
+  audioAlerts.startContinuousAlert('distraction');
+  assert(audioAlerts.activeAlert !== null, 'Continuous distraction alert is active');
+  assert(audioAlerts.activeAlert.category === 'distraction', 'Category is distraction');
+  assert(audioAlerts.activeAlert.isContinuous === true, 'Session is marked continuous');
+
+  // Higher priority drowsiness preempts distraction
+  audioAlerts.startContinuousAlert('drowsiness');
+  assert(audioAlerts.activeAlert.category === 'drowsiness', 'Continuous drowsiness alert preempted distraction');
+
+  // Eye reopen stops drowsiness immediately
+  audioAlerts.stopAlert('drowsiness');
+  assert(audioAlerts.activeAlert === null, 'Drowsiness alert stopped immediately upon eye reopen');
+
+  // New distraction event starts immediately without cooldown delay
+  audioAlerts.startContinuousAlert('distraction');
+  assert(audioAlerts.activeAlert !== null && audioAlerts.activeAlert.category === 'distraction', 'Distraction alert started immediately with zero cooldown lockout');
+
+  // Driver looks forward stops distraction immediately
+  audioAlerts.stopAlert('distraction');
+  assert(audioAlerts.activeAlert === null, 'Distraction alert stopped immediately when looking forward');
+
   console.log(`\n======================================================`);
   console.log(`ALL TESTS PASSED: ${testsPassed} passed, ${testsFailed} failed`);
   console.log(`======================================================\n`);

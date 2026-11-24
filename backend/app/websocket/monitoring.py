@@ -141,9 +141,11 @@ async def monitoring_websocket(websocket: WebSocket, session_id: str, token: Opt
                     confidence = face_result.get("confidence", 0.98)
 
                     # Drowsiness evaluation
-                    drowsy_status, is_drowsy, drowsy_severity = drowsiness_detector.evaluate(ear, mar)
+                    # Returns: (status, is_drowsy[continuous], severity, is_new_alert[one-shot DB write])
+                    drowsy_status, is_drowsy, drowsy_severity, drowsy_new_alert = drowsiness_detector.evaluate(ear, mar)
                     # Distraction evaluation
-                    distract_status, is_distracted, distract_severity = distraction_detector.evaluate(yaw, pitch)
+                    # Returns: (status, is_distracted[continuous], severity, is_new_alert[one-shot DB write])
+                    distract_status, is_distracted, distract_severity, distract_new_alert = distraction_detector.evaluate(yaw, pitch)
                     # Threat evaluation
                     threat_res = threat_detector.analyze_frame(img_bytes, simulate_scenario=active_scenario)
 
@@ -170,7 +172,7 @@ async def monitoring_websocket(websocket: WebSocket, session_id: str, token: Opt
                         eye_state = "open"
 
                     # If eyes have reopened and attention is normal, clear any active drowsiness alarm
-                    if had_active_drowsy_alert and drowsy_status == "ATTENTION NORMAL" and eye_state == "open":
+                    if had_active_drowsy_alert and not is_drowsy:
                         had_active_drowsy_alert = False
                         await websocket.send_json({
                             "type": "alert_cleared",
@@ -178,7 +180,7 @@ async def monitoring_websocket(websocket: WebSocket, session_id: str, token: Opt
                         })
 
                     # If driver returned gaze to road and distraction cleared, clear any active distraction alarm
-                    if had_active_distract_alert and distract_status == "FOCUSED ON ROAD":
+                    if had_active_distract_alert and not is_distracted:
                         had_active_distract_alert = False
                         await websocket.send_json({
                             "type": "alert_cleared",
@@ -240,24 +242,28 @@ async def monitoring_websocket(websocket: WebSocket, session_id: str, token: Opt
                     # Trigger Alerts if thresholds crossed
                     alert_to_save = None
                     if is_drowsy:
+                        # Update continuous state tracker (drives alert_cleared emission)
                         had_active_drowsy_alert = True
-                        alert_to_save = {
-                            "category": "drowsiness",
-                            "title": drowsy_status,
-                            "description": f"Prolonged eye closure detected (EAR: {ear:.3f}). Safety rating: {safety_score}/100.",
-                            "severity": drowsy_severity,
-                            "ear_value": ear,
-                        }
+                        # Only persist to DB on the first frame of a new alert episode
+                        if drowsy_new_alert:
+                            alert_to_save = {
+                                "category": "drowsiness",
+                                "title": drowsy_status,
+                                "description": f"Prolonged eye closure detected (EAR: {ear:.3f}). Safety rating: {safety_score}/100.",
+                                "severity": drowsy_severity,
+                                "ear_value": ear,
+                            }
                     elif is_distracted:
                         had_active_distract_alert = True
-                        alert_to_save = {
-                            "category": "distraction",
-                            "title": distract_status,
-                            "description": f"Gaze departure detected (Pitch: {pitch:.1f}°, Yaw: {yaw:.1f}°). Safety rating: {safety_score}/100.",
-                            "severity": distract_severity,
-                            "pitch_angle": pitch,
-                            "yaw_angle": yaw,
-                        }
+                        if distract_new_alert:
+                            alert_to_save = {
+                                "category": "distraction",
+                                "title": distract_status,
+                                "description": f"Gaze departure detected (Pitch: {pitch:.1f}°, Yaw: {yaw:.1f}°). Safety rating: {safety_score}/100.",
+                                "severity": distract_severity,
+                                "pitch_angle": pitch,
+                                "yaw_angle": yaw,
+                            }
                     elif threat_res.get("detected"):
                         alert_to_save = {
                             "category": "weapon",

@@ -90,34 +90,73 @@ export default function DriverMonitorPage() {
           if (data.type === 'metrics') {
             setMetrics(data);
 
-            // Auto-clear alert condition and immediately silence warning beep when eyes reopen
             const eyeState = data.drowsiness?.eyeState;
             const drowsyStatus = data.drowsiness?.status;
-            if (eyeState === 'open' && drowsyStatus === 'ATTENTION NORMAL') {
+            const distStatus = data.distraction?.status;
+
+            const isDrowsy = drowsyStatus === 'DROWSINESS DETECTED' || drowsyStatus === 'MICROSLEEP WARNING';
+            const isDistracted = distStatus === 'HEAD TURNED / OFF-ROAD' || distStatus === 'PHONE / DOWNWARD GAZE';
+
+            // 1. Drowsiness Continuous Alarm Handling
+            if (isDrowsy) {
+              const priority = drowsyStatus === 'MICROSLEEP WARNING' ? 'critical_warning' : 'drowsiness';
+              audioAlerts.startContinuousAlert(priority);
               setActiveAlert((current) => {
-                if (current?.category === 'drowsiness') {
-                  audioAlerts.stopCurrentAlert();
-                  return null;
+                if (!current || current.category !== 'drowsiness') {
+                  return {
+                    id: 'drowsy-active',
+                    category: 'drowsiness',
+                    title: drowsyStatus,
+                    description: `Prolonged eye closure detected (EAR: ${data.drowsiness?.ear?.toFixed(3)}). Safety rating: ${data.safetyScore}/100.`,
+                    severity: drowsyStatus === 'MICROSLEEP WARNING' ? 'critical' : 'high',
+                    timestamp: new Date().toISOString(),
+                  };
                 }
                 return current;
               });
+            } else {
+              // Eyes are open OR transitioning — stop drowsiness alarm immediately
+              if (audioAlerts.isAlertActive('drowsiness') || audioAlerts.isAlertActive('critical_warning')) {
+                audioAlerts.stopAlert('drowsiness');
+                audioAlerts.stopAlert('critical_warning');
+                setActiveAlert((current) => {
+                  if (current?.category === 'drowsiness') return null;
+                  return current;
+                });
+              }
             }
 
-            // Auto-clear distraction alert and immediately silence warning beep when driver returns gaze to road
-            const distStatus = data.distraction?.status;
-            if (distStatus === 'FOCUSED ON ROAD') {
+            // 2. Distraction Continuous Alarm Handling (independent of drowsiness)
+            if (isDistracted) {
+              // Always attempt — startContinuousAlert respects priority; drowsiness (prio 3) wins over distraction (prio 2)
+              audioAlerts.startContinuousAlert('distraction');
               setActiveAlert((current) => {
-                if (current?.category === 'distraction') {
-                  audioAlerts.stopCurrentAlert();
-                  return null;
+                if (!current || current.category !== 'distraction') {
+                  return {
+                    id: 'distract-active',
+                    category: 'distraction',
+                    title: distStatus ?? 'HEAD TURNED / OFF-ROAD',
+                    description: `Gaze departure detected (Pitch: ${data.distraction?.pitch?.toFixed(1)}°, Yaw: ${data.distraction?.yaw?.toFixed(1)}°). Safety rating: ${data.safetyScore}/100.`,
+                    severity: distStatus === 'PHONE / DOWNWARD GAZE' ? 'high' : 'medium',
+                    timestamp: new Date().toISOString(),
+                  };
                 }
                 return current;
               });
+            } else {
+              // Driver returned gaze forward — stop distraction alarm immediately
+              if (audioAlerts.isAlertActive('distraction')) {
+                audioAlerts.stopAlert('distraction');
+                setActiveAlert((current) => {
+                  if (current?.category === 'distraction') return null;
+                  return current;
+                });
+              }
             }
           } else if (data.type === 'alert_cleared') {
+            audioAlerts.stopAlert(data.category);
             setActiveAlert((current) => {
               if (current?.category === data.category) {
-                audioAlerts.stopCurrentAlert();
                 return null;
               }
               return current;

@@ -2,6 +2,12 @@
 DriveGuard AI — 6-DOF Head Pose & Distraction Detector
 Evaluates yaw and pitch angles to detect off-road gaze departures with
 adaptive forward-facing calibration, temporal filtering, and rapid alert clearing.
+
+Design principles:
+- 'is_new_alert'  fires ONCE per new alert event (for DB persistence and WS broadcast).
+- 'is_distracted' is True for the ENTIRE DURATION the condition persists (drives continuous audio).
+- Counter resets to 0 IMMEDIATELY when driver returns forward so the next episode
+  triggers a fresh alert without cooldown delay.
 """
 import logging
 import time
@@ -19,7 +25,7 @@ class DistractionDetector:
     - Adaptive forward-facing calibration (learns driver's natural neutral posture).
     - Deviation-based detection rather than rigid absolute angles.
     - Immediate counter reset and alert clearing when driver returns gaze to road.
-    - Cooldown management to prevent repeated audio spam.
+    - Separate is_distracted (continuous) vs is_new_alert (one-shot DB event).
     """
 
     def __init__(self):
@@ -30,8 +36,12 @@ class DistractionDetector:
         self.consec_threshold = 8  # consecutive frames (~0.8s at 10-15fps) required to trigger alert
         self.consecutive_distracted_frames = 0
         self.last_alert_time = 0.0
-        self.cooldown_seconds = 6.0
-        self.alert_active = False
+        self.cooldown_seconds = 6.0  # Minimum gap before logging a *new* DB alert
+
+        # alert_active: True during the entire distraction episode (drives continuous beep)
+        self.alert_active: bool = False
+        # new_alert_fired: True after first DB alert fires for this episode (prevents duplicate DB writes)
+        self.new_alert_fired: bool = False
 
         # Adaptive Neutral Calibration
         self.is_calibrated = False
@@ -40,7 +50,7 @@ class DistractionDetector:
         self.neutral_yaw = 0.0
         self.neutral_pitch = 0.0
 
-        # Last evaluated metrics
+        # Last evaluated metrics (for external inspection / telemetry)
         self.last_yaw = 0.0
         self.last_pitch = 0.0
         self.last_yaw_dev = 0.0
@@ -62,7 +72,7 @@ class DistractionDetector:
         if len(self.calibration_samples) >= self.min_calibration_samples:
             med_yaw = float(np.median([s[0] for s in self.calibration_samples]))
             med_pitch = float(np.median([s[1] for s in self.calibration_samples]))
-            # Constrain neutral to sensible cockpit ranges (-12° to +12°)
+            # Constrain neutral to sensible cockpit ranges
             self.neutral_yaw = max(-12.0, min(12.0, med_yaw))
             self.neutral_pitch = max(-15.0, min(15.0, med_pitch))
             self.is_calibrated = True
@@ -75,10 +85,13 @@ class DistractionDetector:
 
         return False
 
-    def evaluate(self, yaw: float, pitch: float) -> tuple[str, bool, str]:
+    def evaluate(self, yaw: float, pitch: float) -> Tuple[str, bool, str, bool]:
         """
         Evaluate distraction from head pose angles relative to calibrated neutral.
-        Returns: (status_string, is_distracted, severity).
+        Returns: (status_string, is_distracted, severity, is_new_alert)
+
+        - is_distracted:  True for the ENTIRE DURATION the condition persists (drives continuous audio).
+        - is_new_alert:   True only on the FIRST frame of a new alert episode (drives DB write).
         """
         now = time.time()
         self.last_yaw = yaw
@@ -108,40 +121,53 @@ class DistractionDetector:
                     status = "HEAD TURNED / OFF-ROAD"
                     severity = "medium"
 
-                in_cooldown = (now - self.last_alert_time) < self.cooldown_seconds
-                is_alert = (not in_cooldown) and (not self.alert_active)
+                # Maintain continuous distracted state for audio loop
+                self.alert_active = True
 
-                if is_alert:
+                # Fire a new DB alert only once per episode, subject to cooldown
+                is_new_alert = False
+                if not self.new_alert_fired and (now - self.last_alert_time) >= self.cooldown_seconds:
+                    is_new_alert = True
+                    self.new_alert_fired = True
                     self.last_alert_time = now
-                    self.alert_active = True
                     logger.warning(
-                        f"[DistractionDetector] ALERT TRIGGERED: {status} "
+                        f"[DistractionDetector] NEW ALERT: {status} "
                         f"(yaw_dev={yaw_dev:.1f}°, pitch_dev={pitch_dev:.1f}°, "
-                        f"neutral=({self.neutral_yaw:.1f}°, {self.neutral_pitch:.1f}°))"
+                        f"neutral=({self.neutral_yaw:.1f}°, {self.neutral_pitch:.1f}°), "
+                        f"frames={self.consecutive_distracted_frames})"
                     )
 
                 self.last_status = status
-                return status, is_alert, severity
+                return status, True, severity, is_new_alert
 
             # Glancing - transient deviation not yet exceeding duration threshold
             if is_looking_down:
                 self.last_status = "GLANCING DOWN"
-                return "GLANCING DOWN", False, "low"
+                return "GLANCING DOWN", False, "low", False
             self.last_status = "GLANCING ASIDE"
-            return "GLANCING ASIDE", False, "low"
+            return "GLANCING ASIDE", False, "low", False
 
         else:
             # Immediately reset distraction counter when driver returns to forward-facing position
+            if self.alert_active:
+                logger.info(
+                    f"[DistractionDetector] Alert condition CLEARED: driver returned to forward gaze "
+                    f"(yaw_dev={yaw_dev:.1f}°, pitch_dev={pitch_dev:.1f}°)."
+                )
             self.consecutive_distracted_frames = 0
             self.alert_active = False
+            self.new_alert_fired = False
+            # Reset cooldown so next distraction episode triggers fresh alert immediately
+            self.last_alert_time = 0.0
             self.last_status = "FOCUSED ON ROAD"
-            return "FOCUSED ON ROAD", False, "low"
+            return "FOCUSED ON ROAD", False, "low", False
 
     def reset(self):
         """Reset all temporal counters and calibration state."""
         self.consecutive_distracted_frames = 0
         self.last_alert_time = 0.0
         self.alert_active = False
+        self.new_alert_fired = False
         self.is_calibrated = False
         self.calibration_samples.clear()
         self.neutral_yaw = 0.0
